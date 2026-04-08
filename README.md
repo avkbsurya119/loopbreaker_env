@@ -1,3 +1,13 @@
+---
+title: LoopBreaker Environment
+emoji: "🔄"
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+license: mit
+---
+
 # LoopBreaker Environment
 
 LoopBreaker is an OpenEnv environment for detecting overthinking and decision loops.
