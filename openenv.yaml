@@ -1,0 +1,77 @@
+name: loopbreaker_env
+version: "0.1.0"
+description: OpenEnv environment for detecting and interrupting decision loops
+
+# Environment metadata
+metadata:
+  author: LoopBreaker Team
+  license: MIT
+  categories:
+    - productivity
+    - decision-making
+    - behavioral-analysis
+  tags:
+    - loop-detection
+    - overthinking
+    - intervention
+
+# Server configuration
+server:
+  entrypoint: server.app:app
+  port: 8000
+  host: "0.0.0.0"
+
+# Task information
+tasks:
+  categories:
+    - repeated_search
+    - revisit
+    - app_switching
+    - no_loop
+  difficulties:
+    - easy
+    - medium
+    - hard
+  total_tasks: 18
+
+# Action space
+actions:
+  detection:
+    - detect_repeated_search
+    - detect_revisit
+    - detect_app_switching
+    - continue_monitoring
+  intervention:
+    - pause
+    - decide
+    - reframe
+    - continue_monitoring
+
+# Observation space
+observation:
+  fields:
+    - recent_events
+    - task_id
+    - instructions
+    - done
+    - reward
+    - step_count
+    - feedback
+    - metadata
+
+# Reward configuration
+rewards:
+  correct_detection: 1.0
+  correct_intervention: 1.0
+  early_detection_bonus: 0.5
+  partial_intervention: 0.25
+  wrong_detection: -0.5
+  wrong_intervention: -0.5
+  invalid_action: -1.0
+
+# Episode configuration
+episode:
+  max_steps: 5
+  phases:
+    - detection
+    - intervention
