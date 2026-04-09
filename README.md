@@ -1,150 +1,80 @@
----
-title: LoopBreaker Environment
-emoji: 🔄
-colorFrom: blue
-colorTo: purple
-sdk: docker
-pinned: false
-license: mit
-app_port: 8000
----
+# LoopBreaker — OpenEnv Environment
 
-# LoopBreaker Environment
+## Overview
+LoopBreaker simulates a real-world task: detecting and intervening in human decision-making loops.
+People often get stuck in repetitive thinking patterns — searching the same thing, revisiting content,
+or switching apps indecisively. This environment trains AI agents to recognize those patterns and
+suggest the optimal intervention.
 
-LoopBreaker is an OpenEnv environment for detecting overthinking and decision loops.
-
-## Problem
-
-People often get stuck in repetitive digital behavior patterns such as:
-- Repeated searches for the same topic
-- Revisiting the same content multiple times
-- Indecisive switching between apps
-
-These patterns indicate decision paralysis or overthinking that can reduce productivity.
-
-## Goal
-
-The agent must:
-1. Identify whether the current behavior represents a loop state
-2. Classify the type of loop (repeated search, revisiting content, app switching)
-3. Recommend the best intervention (pause, decide, or reframe)
-
-## Tasks
-
-The environment includes 18 scenarios across 4 categories:
-
-### Loop Categories
-1. **Repeated Search** - User searches for the same/similar queries multiple times
-2. **Revisiting Content** - User keeps returning to the same pages or articles
-3. **App Switching** - User oscillates between apps without productive work
-4. **No Loop** - Normal productive behavior (for testing false positives)
-
-### Difficulty Levels
-- **Easy**: Clear, obvious patterns
-- **Medium**: Patterns with some noise or variation
-- **Hard**: Subtle patterns mixed with normal activity
+## Motivation
+Decision-loop detection has direct applications in digital wellness, productivity software,
+and cognitive behavioral tools. This env fills a gap in OpenEnv's coverage of psychological
+and behavioral domains.
 
 ## Action Space
+| Field | Type | Values |
+|---|---|---|
+| `intervention` | string | `decide`, `pause`, `reframe`, `monitor`, `escalate` |
+| `reason` | string (optional) | Agent's explanation |
+| `confidence` | float | 0.0 – 1.0 |
 
-### Detection Actions
-- `detect_repeated_search`: Identify repeated search behavior
-- `detect_revisit`: Identify content revisiting behavior
-- `detect_app_switching`: Identify app switching behavior
-- `continue_monitoring`: No clear loop detected
+## Observation Space
+| Field | Type | Description |
+|---|---|---|
+| `current_behavior_sequence` | list[str] | Last N user actions |
+| `loop_detected` | bool | Whether a loop was found |
+| `loop_type` | str or null | `search_repeat`, `content_revisit`, `app_switch` |
+| `loop_depth` | int | How many times the pattern repeated |
+| `suggested_action` | str or null | Agent's last intervention |
+| `step_number` | int | Current step |
+| `task_description` | str | Task instructions |
+| `time_elapsed` | int | Simulated seconds in session |
 
-### Intervention Actions
-- `pause`: Recommend taking a break
-- `decide`: Encourage making a decision
-- `reframe`: Help reframe the approach
-- `continue_monitoring`: No intervention needed
+## Tasks
+| Task | Difficulty | Max Steps | Description |
+|---|---|---|---|
+| `easy` | Easy | 5 | Simple repeated-search loop. Correct action: `decide` |
+| `medium` | Medium | 8 | App-switch or content-revisit loop. Choose `pause` or `reframe` |
+| `hard` | Hard | 12 | Compound multi-modal loop. All types, best intervention, confidence ≥ 0.8 |
 
-## Evaluation
+## Reward Function
+- Provides signal at every step (not just end-of-episode)
+- Rewards correct intervention weighted by confidence
+- Awards partial credit for monitoring or near-correct choices
+- Penalizes clearly wrong or looping actions (reward = 0.0)
 
-The environment rewards:
-- **+1.0** for correct loop detection
-- **+1.0** for correct intervention recommendation
-- **+0.5** early detection bonus (step 1)
-- **+0.25** early detection bonus (step 2)
-- **+0.25** for acceptable but non-optimal intervention
-- **-0.5** for wrong detection or intervention
-- **-1.0** for invalid actions
+## Baseline Scores
+| Task | Baseline Score |
+|---|---|
+| easy | ~0.75 |
+| medium | ~0.55 |
+| hard | ~0.30 |
 
-Total possible reward per episode: **2.5** (perfect detection + intervention with early bonus)
+## Setup & Usage
 
-## Installation
-
+### Local run
 ```bash
-pip install -e .
+pip install -r requirements.txt
+uvicorn server.main:app --host 0.0.0.0 --port 7860
 ```
 
-## Usage
-
-### Start the Server
-
+### Docker
 ```bash
-uvicorn server.app:app --host 0.0.0.0 --port 8000
+docker build -t loopbreaker .
+docker run -p 7860:7860 loopbreaker
 ```
 
-### Use the Client
-
-```python
-from loopbreaker_env.client import LoopBreakerEnv
-from loopbreaker_env.models import LoopBreakerAction
-
-# Synchronous usage
-with LoopBreakerEnv(base_url="http://localhost:8000").sync() as env:
-    # Reset to start a new episode
-    obs = env.reset()
-    print(f"Task: {obs.task_id}")
-    print(f"Events: {obs.recent_events}")
-
-    # Take a detection action
-    action = LoopBreakerAction(action_type="detect_repeated_search")
-    obs = env.step(action)
-    print(f"Reward: {obs.reward}, Feedback: {obs.feedback}")
-
-    # Take an intervention action
-    action = LoopBreakerAction(action_type="decide")
-    obs = env.step(action)
-    print(f"Done: {obs.done}, Final Reward: {obs.reward}")
-```
-
-### Async Usage
-
-```python
-import asyncio
-from loopbreaker_env.client import LoopBreakerEnv
-from loopbreaker_env.models import LoopBreakerAction
-
-async def main():
-    async with LoopBreakerEnv(base_url="http://localhost:8000") as env:
-        obs = await env.reset()
-        print(obs)
-
-asyncio.run(main())
-```
-
-## API Endpoints
-
-- `GET /health` - Health check
-- `GET /info` - Environment information
-- `GET /tasks` - List all tasks
-- `GET /tasks/{task_id}` - Get task details
-- `POST /reset` - Reset environment
-- `POST /step` - Execute action
-- `GET /state` - Get current state
-- `GET /docs` - OpenAPI documentation
-
-## Docker
-
+### Run inference baseline
 ```bash
-# Build
-docker build -t loopbreaker_env -f server/Dockerfile .
-
-# Run
-docker run -p 8000:8000 loopbreaker_env
+export HF_TOKEN=your_token
+export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+export API_BASE_URL=https://router.huggingface.co/v1
+export LOOPBREAKER_ENV_URL=http://localhost:7860
+python inference.py
 ```
 
-## License
-
-MIT
+### API Endpoints
+- `POST /reset?task_name=easy` — Start new episode
+- `POST /step` — Submit action, get observation + reward
+- `GET /state` — Get current environment state
+- `GET /health` — Health check

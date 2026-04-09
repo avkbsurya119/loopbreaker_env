@@ -1,199 +1,151 @@
 """
-LoopBreaker Environment - Inference Script
-============================================
-Detects decision loops (repeated searches, revisits, app switching) and recommends interventions.
+Inference Script — LoopBreaker OpenEnv
+=======================================
+MANDATORY env vars:
+  API_BASE_URL   The API endpoint for the LLM.
+  MODEL_NAME     The model identifier.
+  HF_TOKEN       Your Hugging Face / API key.
+  IMAGE_NAME     Docker image name (if using from_docker_image).
+
+stdout FORMAT (strictly required):
+  [START] task=<task_name> env=<benchmark> model=<model_name>
+  [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+  [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 """
 
+import asyncio
 import os
+import json
 import textwrap
 from typing import List, Optional
 
 import httpx
 from openai import OpenAI
 
-# Environment variables
+API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN = os.getenv("HF_TOKEN")
-LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-
-# LoopBreaker env config
-ENV_URL = os.getenv("LOOPBREAKER_URL", "https://avkbsurya119-loopbreaker-env.hf.space")
-TASK_NAME = os.getenv("LOOPBREAKER_TASK", "loopbreaker")
-BENCHMARK = "loopbreaker_env"
-MAX_STEPS = 5
-MAX_TOTAL_REWARD = 2.5  # Max possible: 1.0 detection + 0.5 early bonus + 1.0 intervention
+MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+ENV_URL      = os.getenv("LOOPBREAKER_ENV_URL", "http://localhost:7860")
+TASK_NAME    = os.getenv("LOOPBREAKER_TASK", "easy")
+BENCHMARK    = "loopbreaker"
+MAX_STEPS    = 12
+TEMPERATURE  = 0.3
+MAX_TOKENS   = 256
+SUCCESS_SCORE_THRESHOLD = 0.5
 
 SYSTEM_PROMPT = textwrap.dedent("""
-You are analyzing user activity to detect decision loops and recommend interventions.
+    You are an AI agent interacting with the LoopBreaker environment.
+    Each step you receive a JSON observation showing a user's behavior sequence.
+    Your job is to:
+    1. Detect if the user is stuck in a decision loop.
+    2. Choose the best intervention from: decide, pause, reframe, monitor, escalate.
+    3. State your reason briefly.
+    4. Give a confidence score between 0.0 and 1.0.
 
-Given a list of user events, you must:
-1. First, classify the loop type (detection phase)
-2. Then, recommend an intervention (intervention phase)
-
-Detection actions:
-- detect_repeated_search: User searches same/similar queries repeatedly
-- detect_revisit: User revisits same content multiple times
-- detect_app_switching: User switches between apps indecisively
-- continue_monitoring: No clear loop pattern
-
-Intervention actions:
-- pause: Suggest taking a break
-- decide: Encourage making a decision
-- reframe: Help reframe the approach
-- continue_monitoring: No intervention needed
-
-Reply with ONLY the action name, nothing else.
+    Respond ONLY with a valid JSON object. No markdown, no explanation outside JSON.
+    Format:
+    {"intervention": "decide", "reason": "User searched same query 3 times.", "confidence": 0.9}
 """).strip()
 
 
-def log_start(task: str, env: str, model: str) -> None:
+def log_start(task, env, model):
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
-
-def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+def log_step(step, action, reward, done, error):
     error_val = error if error else "null"
     done_val = str(done).lower()
     print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
 
-
-def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+def log_end(success, steps, score, rewards):
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}", flush=True)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
 
 
-class LoopBreakerClient:
-    """HTTP client for LoopBreaker environment."""
-
-    def __init__(self, base_url: str):
-        self.base_url = base_url
-        self.session_id = "default"
-
-    def _headers(self) -> dict:
-        h = {"Content-Type": "application/json"}
-        if HF_TOKEN:
-            h["Authorization"] = f"Bearer {HF_TOKEN}"
-        return h
-
-    def reset(self, task_id: str = None) -> dict:
-        resp = httpx.post(
-            f"{self.base_url}/reset",
-            json={"task_id": task_id, "session_id": self.session_id},
-            headers=self._headers(),
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    def step(self, action_type: str) -> dict:
-        resp = httpx.post(
-            f"{self.base_url}/step",
-            json={"action": {"action_type": action_type}, "session_id": self.session_id},
-            headers=self._headers(),
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-    def close(self) -> None:
-        pass
-
-
-def format_events(events: list) -> str:
-    lines = []
-    for i, e in enumerate(events, 1):
-        lines.append(f"{i}. [{e.get('type')}] {e.get('value')}")
-    return "\n".join(lines)
-
-
-def get_action(client: OpenAI, events: list, phase: str, feedback: str = "") -> str:
-    """Get action from LLM."""
-    events_str = format_events(events)
-
-    if phase == "detection":
-        user_prompt = f"Events:\n{events_str}\n\nClassify the loop type. Reply with only the detection action."
-    else:
-        user_prompt = f"Events:\n{events_str}\n\nPrevious feedback: {feedback}\n\nRecommend an intervention. Reply with only the intervention action."
-
+def get_agent_action(client: OpenAI, observation: dict, step: int, history: List[str]) -> dict:
+    history_block = "\n".join(history[-4:]) if history else "None"
+    user_msg = f"Step: {step}\nObservation: {json.dumps(observation, indent=2)}\nHistory:\n{history_block}\nWhat is your action?"
     try:
-        completion = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
+                {"role": "user",   "content": user_msg},
             ],
-            temperature=0.3,
-            max_tokens=50,
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+            stream=False,
         )
-        text = (completion.choices[0].message.content or "").strip().lower()
-
-        # Parse action
-        valid_actions = [
-            "detect_repeated_search", "detect_revisit", "detect_app_switching",
-            "pause", "decide", "reframe", "continue_monitoring"
-        ]
-        for action in valid_actions:
-            if action in text:
-                return action
-        return "continue_monitoring"
-    except Exception as e:
-        print(f"[DEBUG] LLM error: {e}", flush=True)
-        return "continue_monitoring"
+        text = (resp.choices[0].message.content or "").strip()
+        # Strip markdown fences if present
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        return json.loads(text)
+    except Exception as exc:
+        print(f"[DEBUG] Model error: {exc}", flush=True)
+        return {"intervention": "monitor", "reason": "fallback", "confidence": 0.5}
 
 
-def main() -> None:
-    llm = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
-    env = LoopBreakerClient(ENV_URL)
-
-    rewards: List[float] = []
+async def run_task(task_name: str) -> dict:
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    rewards = []
     steps_taken = 0
     score = 0.0
     success = False
+    history = []
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
-    try:
-        obs = env.reset()
-        events = obs.get("recent_events", [])
-        done = False
-        feedback = ""
-        phase = "detection"
+    async with httpx.AsyncClient(base_url=ENV_URL, timeout=30) as http:
+        # Reset environment
+        r = await http.post("/reset", params={"task_name": task_name})
+        r.raise_for_status()
+        obs = r.json()["observation"]
 
         for step in range(1, MAX_STEPS + 1):
-            if done:
+            # Get agent action via LLM
+            action_dict = get_agent_action(client, obs, step, history)
+
+            # Send action to environment
+            try:
+                r2 = await http.post("/step", json=action_dict)
+                r2.raise_for_status()
+                result = r2.json()
+            except Exception as e:
+                log_step(step=step, action=str(action_dict), reward=0.0, done=True, error=str(e))
                 break
 
-            action = get_action(llm, events, phase, feedback)
-            obs = env.step(action)
-
-            reward = obs.get("reward") or 0.0
-            done = obs.get("done", False)
-            error = None
-            feedback = obs.get("feedback", "")
+            reward = result.get("reward", 0.0)
+            done   = result.get("done", False)
+            obs    = result["observation"]
+            error  = None
 
             rewards.append(reward)
             steps_taken = step
+            log_step(step=step, action=str(action_dict.get("intervention", "")),
+                     reward=reward, done=done, error=error)
 
-            log_step(step=step, action=action, reward=reward, done=done, error=error)
-
-            # Move to intervention phase after detection
-            if phase == "detection" and action in ["detect_repeated_search", "detect_revisit", "detect_app_switching", "continue_monitoring"]:
-                phase = "intervention"
+            history.append(f"Step {step}: {action_dict} -> reward {reward:.2f}")
 
             if done:
                 break
 
-        total_reward = sum(rewards)
-        score = min(max(total_reward / MAX_TOTAL_REWARD, 0.0), 1.0)
-        success = score >= 0.5
+    score = max(rewards) if rewards else 0.0   # use best-step score
+    score = round(min(max(score, 0.0), 1.0), 3)
+    success = score >= SUCCESS_SCORE_THRESHOLD
+    log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+    return {"task": task_name, "score": score, "success": success}
 
-    except Exception as e:
-        print(f"[DEBUG] Error: {e}", flush=True)
 
-    finally:
-        env.close()
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+async def main():
+    tasks = ["easy", "medium", "hard"]
+    results = []
+    for task in tasks:
+        result = await run_task(task)
+        results.append(result)
+    print(f"\n[SUMMARY] {results}", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

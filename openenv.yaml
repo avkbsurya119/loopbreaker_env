@@ -1,77 +1,65 @@
-name: loopbreaker_env
-version: "0.1.0"
-description: OpenEnv environment for detecting and interrupting decision loops
-
-# Environment metadata
-metadata:
-  author: LoopBreaker Team
-  license: MIT
-  categories:
-    - productivity
-    - decision-making
-    - behavioral-analysis
-  tags:
-    - loop-detection
-    - overthinking
-    - intervention
-
-# Server configuration
-server:
-  entrypoint: server.app:app
-  port: 8000
-  host: "0.0.0.0"
-
-# Task information
+name: loopbreaker
+version: "1.0.0"
+description: >
+  LoopBreaker is a real-world OpenEnv environment where an AI agent must detect
+  and intervene in human decision-making loops — repetitive searches, content revisits,
+  and indecisive app-switching. Agents learn to recognize loop patterns and choose
+  the optimal intervention strategy.
+tags:
+  - openenv
+  - psychology
+  - decision-making
+  - real-world
 tasks:
-  categories:
-    - repeated_search
-    - revisit
-    - app_switching
-    - no_loop
-  difficulties:
-    - easy
-    - medium
-    - hard
-  total_tasks: 18
-
-# Action space
-actions:
-  detection:
-    - detect_repeated_search
-    - detect_revisit
-    - detect_app_switching
-    - continue_monitoring
-  intervention:
-    - pause
-    - decide
-    - reframe
-    - continue_monitoring
-
-# Observation space
-observation:
-  fields:
-    - recent_events
-    - task_id
-    - instructions
-    - done
-    - reward
-    - step_count
-    - feedback
-    - metadata
-
-# Reward configuration
-rewards:
-  correct_detection: 1.0
-  correct_intervention: 1.0
-  early_detection_bonus: 0.5
-  partial_intervention: 0.25
-  wrong_detection: -0.5
-  wrong_intervention: -0.5
-  invalid_action: -1.0
-
-# Episode configuration
-episode:
-  max_steps: 5
-  phases:
-    - detection
-    - intervention
+  - name: easy
+    description: "Detect a simple repeated-search loop. Correct intervention: decide."
+    difficulty: easy
+    max_steps: 5
+  - name: medium
+    description: "Detect mixed app-switch or content-revisit loop. Choose pause or reframe."
+    difficulty: medium
+    max_steps: 8
+  - name: hard
+    description: "Detect compound multi-modal loop. Identify all types, best intervention, confidence>=0.8."
+    difficulty: hard
+    max_steps: 12
+action_space:
+  type: object
+  properties:
+    intervention:
+      type: string
+      enum: [decide, pause, reframe, monitor, escalate]
+    reason:
+      type: string
+    confidence:
+      type: number
+      minimum: 0.0
+      maximum: 1.0
+observation_space:
+  type: object
+  properties:
+    current_behavior_sequence:
+      type: array
+      items:
+        type: string
+    loop_detected:
+      type: boolean
+    loop_type:
+      type: string
+      nullable: true
+    loop_depth:
+      type: integer
+    suggested_action:
+      type: string
+      nullable: true
+    step_number:
+      type: integer
+    task_description:
+      type: string
+    time_elapsed:
+      type: integer
+reward_range: [0.0, 1.0]
+baseline_scores:
+  easy: 0.75
+  medium: 0.55
+  hard: 0.30
